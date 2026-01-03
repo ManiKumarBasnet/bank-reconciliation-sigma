@@ -204,7 +204,7 @@ Also visible in **Dashboard** (scroll down on homepage).
 1. **Read** "All Entries" sheet first
 2. **Check** Summary sheet for amounts
 3. **Review** status column meanings
-4. **Contact** DHI InnoTech IT team
+4. **Contact** Sigma Paro Bhutan team
 
 ---
 

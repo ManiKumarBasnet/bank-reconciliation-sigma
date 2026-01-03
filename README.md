@@ -313,7 +313,7 @@ All files included for easy deployment!
 1. Check "All Entries" sheet for complete picture
 2. Check "Summary" sheet for amount matching
 3. Review status column to understand issues
-4. Contact DHI InnoTech IT team
+4. Contact Sigma Paro Bhutan team
 
 ---
 
@@ -342,4 +342,4 @@ All files included for easy deployment!
 
 ---
 
-**Made with ❤️ for DHI InnoTech, Bhutan**
+**Made with ❤️ for Sigma Paro Bhutan**

@@ -27,7 +27,8 @@ app.add_middleware(
 )
 
 # Directories
-BASE_DIR = "/tmp/bank_reconciliation"
+import tempfile as temp_module
+BASE_DIR = os.path.join(temp_module.gettempdir(), "bank_reconciliation")
 REPORTS_DIR = os.path.join(BASE_DIR, "reports")
 METADATA_FILE = os.path.join(BASE_DIR, "reports_metadata.json")
 
@@ -38,22 +39,23 @@ for directory in [BASE_DIR, REPORTS_DIR]:
 class BankReconciliation:
     """Bank reconciliation with accurate categorization"""
     
-    def __init__(self, data_entry_df: pd.DataFrame, bank_statement_path: str):
+    def __init__(self, data_entry_df: pd.DataFrame, bank_statement_path: str, entry_date: str = ""):
         # Filter only entries with journal numbers
         self.original_df = data_entry_df.copy()
         self.data_entry_df = data_entry_df[data_entry_df['ChequeDDNo'].notna()].copy()
         # Keep original format - don't convert ChequeDDNo
         # For matching, we'll use string representation internally
         self.data_entry_df['_ChequeDDNo_str'] = self.data_entry_df['ChequeDDNo'].astype(str).str.strip()
+        self.entry_date = entry_date
         
-        self.bank_df = self.parse_bank_pdf(bank_statement_path)
+        self.bank_df = self.parse_bank_pdf(bank_statement_path, entry_date)
         self.bank_df['journal_number'] = self.bank_df['journal_number'].astype(str).str.strip()
         
         logger.info(f"Data Entry: {len(self.data_entry_df)} valid entries (with journal numbers)")
-        logger.info(f"Bank Statement: {len(self.bank_df)} transactions")
+        logger.info(f"Bank Statement: {len(self.bank_df)} transactions for date {entry_date}")
     
-    def parse_bank_pdf(self, pdf_path: str) -> pd.DataFrame:
-        """Parse Bank of Bhutan statement"""
+    def parse_bank_pdf(self, pdf_path: str, entry_date: str = "") -> pd.DataFrame:
+        """Parse Bank of Bhutan statement and filter by entry date"""
         transactions = []
         
         try:
@@ -90,6 +92,18 @@ class BankReconciliation:
                                 if not journal_number or journal_number == 'None' or len(journal_number) < 3:
                                     continue
                                 
+                                # Filter by date if entry_date provided
+                                # entry_date format: 2026-01-27, post_date format: 27/01/2026
+                                if entry_date:
+                                    # Extract day from both dates for comparison
+                                    try:
+                                        entry_day = entry_date.split('-')[2]  # Get day from 2026-01-27
+                                        post_day = post_date.split('/')[0]    # Get day from 27/01/2026
+                                        if entry_day != post_day:
+                                            continue
+                                    except:
+                                        pass  # If date parsing fails, include transaction
+                                
                                 amount = self.parse_amount(amount_str)
                                 
                                 if amount > 0:
@@ -102,7 +116,7 @@ class BankReconciliation:
                             except:
                                 continue
             
-            logger.info(f"Extracted {len(transactions)} transactions from PDF")
+            logger.info(f"Extracted {len(transactions)} transactions from PDF for date {entry_date}")
             return pd.DataFrame(transactions)
             
         except Exception as e:
@@ -206,7 +220,7 @@ class BankReconciliation:
             'unregistered': pd.DataFrame(unregistered_entries)
         }
     
-    def generate_report(self, output_path: str) -> Dict:
+    def generate_report(self, output_path: str, entry_date: str = "") -> Dict:
         """Generate comprehensive Excel report"""
         
         logger.info("Starting reconciliation...")
@@ -222,6 +236,7 @@ class BankReconciliation:
         mismatches_count = len(adjusted_df[adjusted_df['Status'] == 'Amount Mismatch']) if len(adjusted_df) > 0 else 0
         
         stats = {
+            'entry_date': entry_date,
             'total_entries': int(len(self.data_entry_df)),
             'matched': int(len(categories['matched'])),
             'mismatches': int(mismatches_count),
@@ -270,6 +285,8 @@ class BankReconciliation:
             # Sheet 6: Summary
             summary_data = {
                 'Description': [
+                    '� ENTRY DATE',
+                    '',
                     '📊 TOTAL DATA ENTRIES',
                     '',
                     '✓ Matched Transactions',
@@ -291,6 +308,8 @@ class BankReconciliation:
                     '📈 RECONCILIATION ACCURACY',
                 ],
                 'Value': [
+                    entry_date if entry_date else 'Not specified',
+                    '',
                     stats['total_entries'],
                     '',
                     stats['matched'],
@@ -362,7 +381,7 @@ class BankReconciliation:
         return stats
 
 
-def save_report_metadata(filename: str, stats: Dict, data_entry_name: str, bank_statement_name: str):
+def save_report_metadata(filename: str, stats: Dict, data_entry_name: str, bank_statement_name: str, entry_date: str = ""):
     """Save report metadata"""
     metadata = []
     
@@ -378,6 +397,7 @@ def save_report_metadata(filename: str, stats: Dict, data_entry_name: str, bank_
     metadata.append({
         'filename': filename,
         'timestamp': datetime.now().isoformat(),
+        'entry_date': entry_date,
         'data_entry_file': data_entry_name,
         'bank_statement_file': bank_statement_name,
         'stats': stats
@@ -839,8 +859,8 @@ async def home():
                             </div>
                         </label>
                     </div>
-                    <div class="file-name" id="dataFileName" style="display:none;"></div>
-                    <div class="file-details" id="dataFileDetails" style="display:none;"></div>
+                    <div class="file-name" id="dataEntryFileName" style="display:none;"></div>
+                    <div class="file-details" id="dataEntryFileDetails" style="display:none;"></div>
                 </div>
                 
                 <div class="card upload-card">
@@ -860,6 +880,16 @@ async def home():
                     </div>
                     <div class="file-name" id="bankFileName" style="display:none;"></div>
                     <div class="file-details" id="bankFileDetails" style="display:none;"></div>
+                    
+                    <div style="margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--border);">
+                        <label for="entryDate" style="display: block; margin-bottom: 0.5rem; font-weight: 600; color: var(--text);">
+                            📅 Date of Entry
+                        </label>
+                        <input type="date" id="entryDate" style="width: 100%; padding: 0.75rem; border: 1px solid var(--border); border-radius: 8px; font-size: 1rem;">
+                        <small style="color: var(--gray-600); display: block; margin-top: 0.25rem;">
+                            Select the date to reconcile (system will filter bank transactions to this date only)
+                        </small>
+                    </div>
                 </div>
                 
                 <div class="card full-width-card">
@@ -909,8 +939,8 @@ async def home():
             document.getElementById('dataEntryFile').addEventListener('change', function(e) {
                 dataEntryFile = e.target.files[0];
                 const label = document.getElementById('dataEntryLabel');
-                const fileName = document.getElementById('dataFileName');
-                const fileDetails = document.getElementById('dataFileDetails');
+                const fileName = document.getElementById('dataEntryFileName');
+                const fileDetails = document.getElementById('dataEntryFileDetails');
                 
                 if (dataEntryFile) {
                     label.classList.add('has-file');
@@ -1032,8 +1062,17 @@ async def home():
                             <span class="detail-value">${details.tables_found}</span>
                         </div>
                         <div class="detail-item">
-                            <span class="detail-label">🔍 Transactions:</span>
+                            <span class="detail-label">🔍 Total Transactions:</span>
                             <span class="detail-value">${details.transaction_count}</span>
+                        </div>
+                        <div class="detail-item">
+                            <span class="detail-label">📅 Date-wise Breakdown:</span>
+                            <div style="margin-top: 0.5rem; padding: 0.5rem; background: var(--bg-secondary); border-radius: 4px;">
+                                ${details.date_details && details.date_details.length > 0 ? 
+                                    details.date_details.map(d => `<div style="font-size: 0.85rem; color: var(--gray-600); margin: 0.25rem 0;">• ${d}</div>`).join('') :
+                                    '<div style="font-size: 0.85rem; color: var(--gray-600);">No date information found</div>'
+                                }
+                            </div>
                         </div>
                         <div class="detail-item">
                             <span class="detail-label">📄 File Size:</span>
@@ -1049,6 +1088,12 @@ async def home():
                 const statusCard = document.getElementById('statusCard');
                 const loading = document.getElementById('loading');
                 const btn = document.getElementById('reconcileBtn');
+                const entryDate = document.getElementById('entryDate').value;
+                
+                if (!entryDate) {
+                    alert('Please select the date of entry');
+                    return;
+                }
                 
                 statusCard.classList.remove('show');
                 loading.style.display = 'block';
@@ -1057,6 +1102,7 @@ async def home():
                 const formData = new FormData();
                 formData.append('data_entry', dataEntryFile);
                 formData.append('bank_statement', bankStatementFile);
+                formData.append('entry_date', entryDate);
                 
                 try {
                     const response = await fetch('/reconcile', {
@@ -1159,7 +1205,7 @@ async def home():
                     
                     reportsGrid.innerHTML = reports.map(report => `
                         <div class="report-card">
-                            <div class="report-date">📊 ${new Date(report.timestamp).toLocaleString()}</div>
+                            <div class="report-date">� Entry: ${report.entry_date || 'Not specified'} | �📊 ${new Date(report.timestamp).toLocaleString()}</div>
                             <div class="report-stats">
                                 <div>✓ Matched: ${report.stats.matched}</div>
                                 <div>⚠ Mismatches: ${report.stats.mismatches}</div>
@@ -1257,6 +1303,7 @@ async def analyze_file(
             try:
                 transaction_count = 0
                 total_pages = 0
+                date_breakdown = {}  # To store transactions by date
                 
                 with pdfplumber.open(tmp_path) as pdf:
                     total_pages = len(pdf.pages)
@@ -1266,12 +1313,41 @@ async def analyze_file(
                         if tables:
                             for table in tables:
                                 if table and len(table) > 1:
-                                    # Count data rows excluding header row
-                                    # Filter out total/summary rows
-                                    filtered_rows = sum(1 for row in table[1:] if not any(kw in str(row).upper() for kw in ['TOTAL', 'OPENING', 'CLOSING', 'STATEMENT', 'BALANCE AS']))
-                                    transaction_count += filtered_rows
+                                    # Extract header index
+                                    header_idx = -1
+                                    for idx, row in enumerate(table):
+                                        if any('JOURNAL' in str(cell).upper() for cell in row if cell):
+                                            header_idx = idx
+                                            break
+                                    
+                                    if header_idx == -1:
+                                        continue
+                                    
+                                    # Count data rows and group by date
+                                    for row in table[header_idx + 1:]:
+                                        if not row or len(row) < 5:
+                                            continue
+                                        
+                                        if any(kw in str(row).upper() for kw in ['TOTAL', 'OPENING', 'CLOSING', 'STATEMENT', 'BALANCE AS']):
+                                            continue
+                                        
+                                        try:
+                                            post_date = str(row[0]).strip() if row[0] else ''
+                                            if post_date and post_date != 'None':
+                                                transaction_count += 1
+                                                # Count by date
+                                                if post_date not in date_breakdown:
+                                                    date_breakdown[post_date] = 0
+                                                date_breakdown[post_date] += 1
+                                        except:
+                                            continue
                 
                 os.unlink(tmp_path)
+                
+                # Sort dates and format for display
+                date_details = []
+                for date in sorted(date_breakdown.keys()):
+                    date_details.append(f"{date}: {date_breakdown[date]} transactions")
                 
                 return {
                     "file_type": "pdf",
@@ -1279,7 +1355,9 @@ async def analyze_file(
                     "total_pages": int(total_pages),
                     "tables_found": 1 if transaction_count > 0 else 0,
                     "transaction_count": int(transaction_count),
-                    "file_size": file_size_str
+                    "file_size": file_size_str,
+                    "date_breakdown": date_breakdown,
+                    "date_details": date_details
                 }
             except Exception as e:
                 try:
@@ -1307,7 +1385,8 @@ async def analyze_file(
 @app.post("/reconcile")
 async def reconcile_files(
     data_entry: UploadFile = File(...),
-    bank_statement: UploadFile = File(...)
+    bank_statement: UploadFile = File(...),
+    entry_date: str = Form(...)
 ):
     """Process reconciliation"""
     try:
@@ -1320,15 +1399,15 @@ async def reconcile_files(
             pdf_path = tmp_pdf.name
         
         df = pd.read_excel(excel_path)
-        reconciler = BankReconciliation(df, pdf_path)
+        reconciler = BankReconciliation(df, pdf_path, entry_date)
         
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        output_filename = f"Reconciliation_{timestamp}.xlsx"
+        output_filename = f"Reconciliation_{entry_date}_{timestamp}.xlsx"
         output_path = os.path.join(REPORTS_DIR, output_filename)
         
-        stats = reconciler.generate_report(output_path)
+        stats = reconciler.generate_report(output_path, entry_date)
         
-        save_report_metadata(output_filename, stats, data_entry.filename, bank_statement.filename)
+        save_report_metadata(output_filename, stats, data_entry.filename, bank_statement.filename, entry_date)
         
         os.unlink(excel_path)
         os.unlink(pdf_path)
@@ -1336,6 +1415,7 @@ async def reconcile_files(
         return {
             "success": True,
             "filename": output_filename,
+            "entry_date": entry_date,
             "stats": stats
         }
         
@@ -1398,4 +1478,4 @@ async def health_check():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=5000)
