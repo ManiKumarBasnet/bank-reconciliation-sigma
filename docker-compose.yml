@@ -1,0 +1,23 @@
+version: '3.8'
+
+services:
+  bank-reconciliation:
+    build: .
+    container_name: bank-reconciliation-app
+    ports:
+      - "8000:8000"
+    environment:
+      - TZ=Asia/Thimphu
+    volumes:
+      - reconciliation-data:/tmp/reconciliation_outputs
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  reconciliation-data:
+    driver: local
